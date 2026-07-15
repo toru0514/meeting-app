@@ -4,11 +4,20 @@
 
 import {
   SEED_OUTPUT_TEMPLATES,
+  SEED_PREMISES,
   SEED_PROFILES,
   SEED_SET,
+  SEED_THEMES,
 } from "./seed";
 import { getSupabase, isSupabaseConfigured } from "./supabase";
-import type { OutputTemplate, Profile, ProfileSet } from "./types";
+import type {
+  OutputTemplate,
+  Premise,
+  PremiseStatus,
+  Profile,
+  ProfileSet,
+  Theme,
+} from "./types";
 
 export const storageMode: "supabase" | "local" = isSupabaseConfigured
   ? "supabase"
@@ -18,6 +27,8 @@ const LS_KEYS = {
   sets: "bm_profile_sets",
   profiles: "bm_profiles",
   templates: "bm_output_templates",
+  themes: "bm_themes",
+  premises: "bm_premises",
   seeded: "bm_seeded_v1",
 };
 
@@ -52,6 +63,8 @@ function ensureSeeded(): void {
   lsWrite(LS_KEYS.sets, [SEED_SET]);
   lsWrite(LS_KEYS.profiles, SEED_PROFILES);
   lsWrite(LS_KEYS.templates, SEED_OUTPUT_TEMPLATES);
+  lsWrite(LS_KEYS.themes, SEED_THEMES);
+  lsWrite(LS_KEYS.premises, SEED_PREMISES);
   window.localStorage.setItem(LS_KEYS.seeded, "1");
 }
 
@@ -257,4 +270,193 @@ export async function deleteOutputTemplate(id: string): Promise<void> {
       (t) => t.id !== id,
     ),
   );
+}
+
+// ---------- Themes ----------
+
+export async function listThemes(setId: string): Promise<Theme[]> {
+  const sb = getSupabase();
+  if (sb) {
+    const { data, error } = await sb
+      .from("bm_themes")
+      .select("*")
+      .eq("set_id", setId)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as Theme[];
+  }
+  ensureSeeded();
+  return lsRead<Theme[]>(LS_KEYS.themes, [])
+    .filter((t) => t.set_id === setId)
+    .sort((a, b) => a.sort_order - b.sort_order);
+}
+
+export async function createTheme(
+  setId: string,
+  name: string,
+  description = "",
+): Promise<Theme> {
+  const sb = getSupabase();
+  if (sb) {
+    const { data, error } = await sb
+      .from("bm_themes")
+      .insert({ set_id: setId, name, description })
+      .select()
+      .single();
+    if (error) throw error;
+    return data as Theme;
+  }
+  const themes = lsRead<Theme[]>(LS_KEYS.themes, []);
+  const sort_order =
+    themes.filter((t) => t.set_id === setId).length + 1;
+  const row: Theme = { id: uuid(), set_id: setId, name, description, sort_order };
+  themes.push(row);
+  lsWrite(LS_KEYS.themes, themes);
+  return row;
+}
+
+export async function updateTheme(theme: Theme): Promise<void> {
+  const sb = getSupabase();
+  if (sb) {
+    const { error } = await sb
+      .from("bm_themes")
+      .update({
+        name: theme.name,
+        description: theme.description,
+        sort_order: theme.sort_order,
+      })
+      .eq("id", theme.id);
+    if (error) throw error;
+    return;
+  }
+  const themes = lsRead<Theme[]>(LS_KEYS.themes, []);
+  const idx = themes.findIndex((t) => t.id === theme.id);
+  if (idx >= 0) themes[idx] = theme;
+  lsWrite(LS_KEYS.themes, themes);
+}
+
+export async function deleteTheme(id: string): Promise<void> {
+  const sb = getSupabase();
+  if (sb) {
+    const { error } = await sb.from("bm_themes").delete().eq("id", id);
+    if (error) throw error;
+    return;
+  }
+  lsWrite(
+    LS_KEYS.themes,
+    lsRead<Theme[]>(LS_KEYS.themes, []).filter((t) => t.id !== id),
+  );
+  // テーマ配下の前提も削除（DB は on delete cascade で消える）
+  lsWrite(
+    LS_KEYS.premises,
+    lsRead<Premise[]>(LS_KEYS.premises, []).filter((p) => p.theme_id !== id),
+  );
+}
+
+// ---------- Premises ----------
+
+/** 会社の全前提（会社常設＋テーマ別、全 status）。管理画面用。 */
+export async function listPremises(setId: string): Promise<Premise[]> {
+  const sb = getSupabase();
+  if (sb) {
+    const { data, error } = await sb
+      .from("bm_premises")
+      .select("*")
+      .eq("set_id", setId)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as Premise[];
+  }
+  ensureSeeded();
+  return lsRead<Premise[]>(LS_KEYS.premises, [])
+    .filter((p) => p.set_id === setId)
+    .sort((a, b) => a.sort_order - b.sort_order);
+}
+
+/** 差し込み用。active かつ（会社常設 または 指定テーマ）の前提を返す。 */
+export async function listActivePremisesForGeneration(
+  setId: string,
+  themeId?: string,
+): Promise<Premise[]> {
+  const all = await listPremises(setId);
+  return all.filter(
+    (p) =>
+      p.status === "active" &&
+      (p.theme_id === null || (themeId != null && p.theme_id === themeId)),
+  );
+}
+
+/** 保存。同一 set_id かつ同一 theme_id（null 同士も一致）で body 完全一致の重複はスキップ。 */
+export async function upsertPremise(premise: Premise): Promise<Premise> {
+  const row: Premise = { ...premise, id: premise.id || uuid() };
+  const body = row.body.trim();
+  row.body = body;
+
+  // 新規追加時のみ重複チェック
+  if (!premise.id) {
+    const existing = await listPremises(row.set_id);
+    const dup = existing.find(
+      (p) =>
+        p.theme_id === row.theme_id && p.body.trim() === body,
+    );
+    if (dup) return dup;
+  }
+
+  const sb = getSupabase();
+  if (sb) {
+    const { data, error } = await sb
+      .from("bm_premises")
+      .upsert({
+        id: row.id,
+        set_id: row.set_id,
+        theme_id: row.theme_id,
+        body: row.body,
+        kind: row.kind,
+        status: row.status,
+        source: row.source,
+        sort_order: row.sort_order,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data as Premise;
+  }
+  const premises = lsRead<Premise[]>(LS_KEYS.premises, []);
+  const idx = premises.findIndex((p) => p.id === row.id);
+  if (idx >= 0) premises[idx] = row;
+  else premises.push(row);
+  lsWrite(LS_KEYS.premises, premises);
+  return row;
+}
+
+export async function deletePremise(id: string): Promise<void> {
+  const sb = getSupabase();
+  if (sb) {
+    const { error } = await sb.from("bm_premises").delete().eq("id", id);
+    if (error) throw error;
+    return;
+  }
+  lsWrite(
+    LS_KEYS.premises,
+    lsRead<Premise[]>(LS_KEYS.premises, []).filter((p) => p.id !== id),
+  );
+}
+
+export async function setPremiseStatus(
+  id: string,
+  status: PremiseStatus,
+): Promise<void> {
+  const sb = getSupabase();
+  if (sb) {
+    const { error } = await sb
+      .from("bm_premises")
+      .update({ status })
+      .eq("id", id);
+    if (error) throw error;
+    return;
+  }
+  const premises = lsRead<Premise[]>(LS_KEYS.premises, []);
+  const idx = premises.findIndex((p) => p.id === id);
+  if (idx >= 0) premises[idx] = { ...premises[idx], status };
+  lsWrite(LS_KEYS.premises, premises);
 }
