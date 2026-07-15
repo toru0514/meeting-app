@@ -5,12 +5,15 @@ import { Banner, Button, Card, CopyButton, Field, SegmentedControl } from "@/com
 import {
   buildMeetingPrompt,
   buildMinutesTemplate,
+  buildPremiseExtractionPrompt,
   suggestMinutesFilename,
 } from "@/lib/promptBuilder";
 import {
+  listActivePremisesForGeneration,
   listOutputTemplates,
   listProfiles,
   listSets,
+  listThemes,
   storageMode,
 } from "@/lib/store";
 import {
@@ -18,9 +21,13 @@ import {
   INPUT_MODE_DESCRIPTIONS,
   InputMode,
   OutputTemplate,
+  Premise,
+  PREMISE_KIND_LABELS,
+  PREMISE_KIND_ORDER,
   Profile,
   ProfileSet,
   Stance,
+  Theme,
 } from "@/lib/types";
 
 const STANCE_OPTIONS: { value: Stance; label: string }[] = [
@@ -51,6 +58,9 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
 
   const [setId, setSetId] = useState("");
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [themeId, setThemeId] = useState("");
+  const [previewPremises, setPreviewPremises] = useState<Premise[]>([]);
   const [topic, setTopic] = useState("");
   const [stance, setStance] = useState<Stance>("chairman");
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -82,19 +92,37 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // セット切り替え時に役を読み込み、全役ONにする
+  // セット切り替え時に役・テーマを読み込み、全役ONにする
   useEffect(() => {
     if (!setId) return;
     (async () => {
       try {
-        const p = await listProfiles(setId);
+        const [p, t] = await Promise.all([listProfiles(setId), listThemes(setId)]);
         setProfiles(p);
         setSelectedRoleIds(p.map((x) => x.id));
+        setThemes(t);
+        setThemeId("");
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
   }, [setId]);
+
+  // テーマ／セット変化時に差し込まれる前提をプレビュー用に読み込む
+  useEffect(() => {
+    if (!setId) {
+      setPreviewPremises([]);
+      return;
+    }
+    (async () => {
+      try {
+        const p = await listActivePremisesForGeneration(setId, themeId || undefined);
+        setPreviewPremises(p);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [setId, themeId]);
 
   const currentSet = useMemo(
     () => sets.find((s) => s.id === setId),
@@ -126,8 +154,9 @@ export default function GeneratePage() {
       includeDevil,
       inputMode,
       outputTemplateKey: outputKey,
+      themeId: themeId || undefined,
     };
-    const p = buildMeetingPrompt(input, currentSet, selected, tpl);
+    const p = buildMeetingPrompt(input, currentSet, selected, tpl, previewPremises);
     const dateStr = new Date().toISOString().slice(0, 10);
     setPrompt(p);
     setMinutes(buildMinutesTemplate(input, p, dateStr));
@@ -179,6 +208,47 @@ export default function GeneratePage() {
             ))}
           </select>
         </Field>
+
+        <Field label="テーマ" hint="選ぶと会社常設＋テーマ別の前提が会議プロンプトに差し込まれます。">
+          <select value={themeId} onChange={(e) => setThemeId(e.target.value)}>
+            <option value="">テーマなし（会社常設のみ）</option>
+            {themes.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <details>
+          <summary style={{ cursor: "pointer", color: "var(--muted)", fontSize: 13 }}>
+            差し込まれる前提（{previewPremises.length}件）
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            {previewPremises.length === 0 ? (
+              <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                差し込む前提はありません。「前提」画面で追加できます。
+              </p>
+            ) : (
+              PREMISE_KIND_ORDER.map((kind) => {
+                const items = previewPremises.filter((p) => p.kind === kind);
+                if (items.length === 0) return null;
+                return (
+                  <div key={kind} style={{ marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                      {PREMISE_KIND_LABELS[kind]}
+                    </div>
+                    <ul style={{ margin: "2px 0 0", paddingLeft: 18, fontSize: 13 }}>
+                      {items.map((p) => (
+                        <li key={p.id}>{p.body}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </details>
       </Card>
 
       <Card style={{ marginBottom: 16 }}>
@@ -300,6 +370,11 @@ export default function GeneratePage() {
             title="議事録テンプレート"
             subtitle={`保存先の目安: /meetings/${filename}`}
             text={minutes}
+          />
+          <OutputBlock
+            title="前提追加プロンプト"
+            subtitle="会議の最後に流し、出力を「前提」画面に貼り付けて蓄積する"
+            text={buildPremiseExtractionPrompt()}
           />
         </div>
       )}
