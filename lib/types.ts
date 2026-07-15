@@ -66,7 +66,54 @@ export type GenerationInput = {
   inputMode: InputMode;
   /** 出力テンプレートの key */
   outputTemplateKey: string;
+  /** 選択テーマ（未選択なら会社常設のみ差し込む） */
+  themeId?: string;
 };
+
+/** 前提の種類 */
+export type PremiseKind = "fact" | "constraint" | "goal" | "hypothesis";
+/** 前提の状態 */
+export type PremiseStatus = "active" | "retired";
+/** 前提の由来 */
+export type PremiseSource = "manual" | "chat";
+
+/** テーマ（会議の題目/プロジェクト、bm_themes） */
+export type Theme = {
+  id: string;
+  set_id: string;
+  name: string;
+  description: string;
+  sort_order: number;
+  created_at?: string;
+};
+
+/** 前提（bm_premises）。theme_id が null なら会社常設 */
+export type Premise = {
+  id: string;
+  set_id: string;
+  theme_id: string | null;
+  body: string;
+  kind: PremiseKind;
+  status: PremiseStatus;
+  source: PremiseSource;
+  sort_order: number;
+  created_at?: string;
+};
+
+export const PREMISE_KIND_LABELS: Record<PremiseKind, string> = {
+  goal: "目標",
+  constraint: "制約",
+  fact: "事実",
+  hypothesis: "仮説",
+};
+
+/** 差し込み・表示時の見出し順（目標→制約→事実→仮説） */
+export const PREMISE_KIND_ORDER: PremiseKind[] = [
+  "goal",
+  "constraint",
+  "fact",
+  "hypothesis",
+];
 
 export const STANCE_LABELS: Record<Stance, string> = {
   chairman: "会長",
