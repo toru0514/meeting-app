@@ -1,4 +1,4 @@
-import type { OutputTemplate, Profile, ProfileSet } from "./types";
+import type { OutputTemplate, Premise, Profile, ProfileSet, Theme } from "./types";
 
 // 初期データ。Supabase 未設定時の localStorage 初期投入、
 // および migration.sql のシードと対応する。
@@ -198,6 +198,10 @@ export const SEED_PROFILES: Profile[] = [
     sort_order: 9,
   },
 ];
+
+// テーマ・前提の初期値（空スタート。オーナーが宣言して育てる）
+export const SEED_THEMES: Theme[] = [];
+export const SEED_PREMISES: Premise[] = [];
 
 // 悪魔の代弁者の固定テキスト（常駐・条件なし・役割固定）
 export const DEVIL = {

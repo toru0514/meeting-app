@@ -34,6 +34,32 @@ create table if not exists bm_output_templates (
   body text not null default ''
 );
 
+create table if not exists bm_themes (
+  id uuid primary key default gen_random_uuid(),
+  set_id uuid not null references bm_profile_sets(id) on delete cascade,
+  name text not null,
+  description text not null default '',
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists bm_themes_set_id_idx on bm_themes(set_id);
+
+create table if not exists bm_premises (
+  id uuid primary key default gen_random_uuid(),
+  set_id uuid not null references bm_profile_sets(id) on delete cascade,
+  theme_id uuid references bm_themes(id) on delete cascade,
+  body text not null,
+  kind text not null default 'fact',
+  status text not null default 'active',
+  source text not null default 'manual',
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists bm_premises_set_id_idx on bm_premises(set_id);
+create index if not exists bm_premises_theme_id_idx on bm_premises(theme_id);
+
 -- ============ RLS（個人利用・最小限） ============
 -- 既存プロジェクトのポリシーに合わせて調整すること。
 -- 下記は anon キーでの読み書きを許可する（個人利用前提・bm_ テーブルのみ）。
@@ -41,6 +67,8 @@ create table if not exists bm_output_templates (
 alter table bm_profile_sets enable row level security;
 alter table bm_profiles enable row level security;
 alter table bm_output_templates enable row level security;
+alter table bm_themes enable row level security;
+alter table bm_premises enable row level security;
 
 do $$
 begin
@@ -52,6 +80,12 @@ begin
   end if;
   if not exists (select 1 from pg_policies where tablename = 'bm_output_templates' and policyname = 'bm_templates_all') then
     create policy bm_templates_all on bm_output_templates for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'bm_themes' and policyname = 'bm_themes_all') then
+    create policy bm_themes_all on bm_themes for all using (true) with check (true);
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'bm_premises' and policyname = 'bm_premises_all') then
+    create policy bm_premises_all on bm_premises for all using (true) with check (true);
   end if;
 end $$;
 
