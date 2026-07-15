@@ -17,6 +17,7 @@ export const viewport: Viewport = {
 const navItems = [
   { href: "/", label: "生成", icon: "⚙️" },
   { href: "/profiles", label: "役の設定", icon: "👥" },
+  { href: "/premises", label: "前提", icon: "🧾" },
   { href: "/templates", label: "出力形式", icon: "📄" },
 ];
 
