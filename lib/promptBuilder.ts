@@ -1,7 +1,11 @@
+import { PREMISE_EXTRACTION_HEADER } from "./premiseFormat";
 import { DEVIL } from "./seed";
 import {
   GenerationInput,
   OutputTemplate,
+  Premise,
+  PREMISE_KIND_LABELS,
+  PREMISE_KIND_ORDER,
   Profile,
   ProfileField,
   ProfileSet,
@@ -60,7 +64,44 @@ const COMMON_RULES = `# 全役員への共通規律
 6. **反対根拠が事実で消えたら、潔く撤回せよ。** それも誠実さである。`;
 
 const PRE_TASK = `# 事前タスク（議論の前に）
-各役は、自分の判断に必要な条件（予算の細部、現在の制作・運用状況、保有機材・リソースなど）が不明な場合、「小規模な1人運営の木工ブランドならこうだろう」という現実的な前提を自分で1〜2行で宣言してから議論を始めよ。前提は明示し、不明な点は断定せず「もし〇〇なら」と条件化して会長に事実確認を促せ。`;
+各役は、自分の判断に必要な条件（予算の細部、現在の制作・運用状況、保有機材・リソースなど）が不明な場合、「小規模な1人運営の木工ブランドならこうだろう」という現実的な前提を自分で1〜2行で宣言してから議論を始めよ。前提は明示し、不明な点は断定せず「もし〇〇なら」と条件化して会長に事実確認を促せ。ただし「# 既知の前提」に記載済みの点は再宣言せず、書かれていない点についてのみ仮定を宣言せよ。`;
+
+/** 会社常設＋テーマ別の active 前提を「# 既知の前提」セクションに整形する。0件なら null */
+function renderPremisesSection(premises: Premise[]): string | null {
+  const active = premises.filter((p) => p.status === "active");
+  if (active.length === 0) return null;
+  const parts: string[] = [
+    "# 既知の前提（確定事項）",
+    "以下はオーナーが確定済みと宣言した前提である。これらは断定して議論を進めてよい。ここに書かれていない事実は、従来どおり断定せず、必要なら会長に確認せよ。",
+  ];
+  for (const kind of PREMISE_KIND_ORDER) {
+    const items = active.filter((p) => p.kind === kind);
+    if (items.length === 0) continue;
+    parts.push(
+      `## ${PREMISE_KIND_LABELS[kind]}\n` + items.map((p) => `- ${p.body}`).join("\n"),
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/** 会議末に流す「前提追加プロンプト」。会話からオーナー由来の前提のみを抽出させる。 */
+export function buildPremiseExtractionPrompt(): string {
+  return `直前までの会話をもとに、私（オーナー/会長）がこの会話で開示・表明した「ブランドや事業の前提」だけを抽出してください。
+
+# 重要な区別
+- 対象は「私がこういう事業/ブランドだと述べた事実・制約・目標・仮説」だけ。
+- 会議の結論・各役員の主張・提案・意思決定は前提ではないので含めない。
+- 新情報が無ければ「（追加なし）」とだけ返す。
+
+# 出力フォーマット（厳守）
+${PREMISE_EXTRACTION_HEADER}
+- [fact] 事実の前提
+- [constraint] 制約の前提
+- [goal] 目標の前提
+- [hypothesis] 仮説の前提
+
+kind は fact / constraint / goal / hypothesis のいずれか。1行1前提。簡潔に。`;
+}
 
 const FLOW = `# 進め方
 1. 各役が議題に意見を述べる（最低1回ずつ）。立場は自然と分かれるはず。
@@ -82,6 +123,7 @@ export function buildMeetingPrompt(
   set: ProfileSet,
   profiles: Profile[],
   outputTemplate: OutputTemplate,
+  premises: Premise[] = [],
 ): string {
   const stanceLabel = STANCE_LABELS[input.stance];
   const memberCount = profiles.length + (input.includeDevil ? 1 : 0);
@@ -99,6 +141,10 @@ export function buildMeetingPrompt(
   parts.push(
     `# 私の立場\n私は「${stanceLabel}」として参加する。\n${stanceInstruction(input.stance)}`,
   );
+
+  // 既知の前提（会社常設＋テーマ別）。会議の土台情報として立場の直後に置く。
+  const premisesSection = renderPremisesSection(premises);
+  if (premisesSection) parts.push(premisesSection);
 
   // 社長役と立場の重複に対する注記
   if (input.stance === "president" && profiles.some((p) => p.role_key === "president")) {
